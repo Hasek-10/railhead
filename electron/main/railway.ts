@@ -12,6 +12,7 @@ export interface CommandResult {
 export interface RunOptions {
   cwd?: string
   token?: string
+  env?: Record<string, string>
 }
 
 function buildEnv(token?: string): NodeJS.ProcessEnv {
@@ -63,7 +64,7 @@ export async function runCommand(
   options?: RunOptions
 ): Promise<CommandResult> {
   return new Promise((resolve) => {
-    const env = buildEnv(options?.token)
+    const env = { ...buildEnv(options?.token), ...options?.env }
     const proc = spawn('npx', ['@railway/cli', ...args], {
       cwd: options?.cwd || process.cwd(),
       env,
@@ -97,7 +98,7 @@ export function streamCommand(
   args: string[],
   options?: RunOptions
 ): () => void {
-  const env = buildEnv(options?.token)
+  const env = { ...buildEnv(options?.token), ...options?.env }
   const proc = spawn('npx', ['@railway/cli', ...args], {
     cwd: options?.cwd || process.cwd(),
     env,

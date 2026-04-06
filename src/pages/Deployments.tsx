@@ -418,10 +418,16 @@ export default function Deployments() {
     }
   }, [projectId, serviceId, envId, limit])
 
-  useEffect(() => { if (projectId && serviceId && envId) loadDeployments() }, [projectId, serviceId, envId])
+  useEffect(() => { if (projectId && serviceId && envId) loadDeployments() }, [projectId, serviceId, envId, limit])
+
+  const STATUS_GROUPS: Record<string, string[]> = {
+    success:  ['success', 'complete'],
+    failed:   ['failed', 'crashed', 'error'],
+    building: ['building', 'deploying', 'initializing'],
+  }
 
   const filtered = deployments.filter((d) =>
-    statusFilter === 'all' || d.status?.toLowerCase() === statusFilter
+    statusFilter === 'all' || (STATUS_GROUPS[statusFilter] ?? [statusFilter]).includes(d.status?.toLowerCase())
   )
 
   const groups = groupByDate(filtered)

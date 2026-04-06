@@ -145,13 +145,35 @@ export default function ProjectDetail({ project, onClose }: Props) {
   )
   const logCleanups = useRef<Map<string, () => void>>(new Map())
 
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
   useEffect(() => {
     window.railway.hasGithubDesktop().then(setHasGithubDesktop).catch(() => {})
     linkAndLoad()
     return () => {
       logCleanups.current.forEach((cleanup) => cleanup())
+      if (pollRef.current) clearInterval(pollRef.current)
     }
   }, [selectedEnv])
+
+  // Auto-refresh while any service is deploying/building
+  useEffect(() => {
+    const hasActive = serviceDetails.some((sd) => {
+      const s = sd.status?.status?.toLowerCase()
+      return s === 'deploying' || s === 'building' || s === 'initializing'
+    })
+    if (hasActive && !pollRef.current) {
+      pollRef.current = setInterval(() => {
+        loadServiceStatuses()
+      }, 10_000)
+    } else if (!hasActive && pollRef.current) {
+      clearInterval(pollRef.current)
+      pollRef.current = null
+    }
+    return () => {
+      if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null }
+    }
+  }, [serviceDetails])
 
   const linkAndLoad = async () => {
     setLinking(true)
@@ -223,19 +245,24 @@ export default function ProjectDetail({ project, onClose }: Props) {
       prev.map((sd) => sd.service.id === serviceId ? { ...sd, actionStatus: 'loading', actionMsg: '' } : sd)
     )
     try {
+      const svcName = serviceDetails.find(sd => sd.service.id === serviceId)?.service.name ?? serviceId
       const result = action === 'redeploy'
-        ? await window.railway.serviceRedeploy(project.id, serviceId, selectedEnv.id)
-        : await window.railway.serviceRestart(project.id, serviceId, selectedEnv.id)
+        ? await window.railway.serviceRedeploy(project.id, serviceId, selectedEnv.id, project.name, svcName)
+        : await window.railway.serviceRestart(project.id, serviceId, selectedEnv.id, project.name, svcName)
       const success = result.code === 0
       setServiceDetails((prev) =>
         prev.map((sd) => sd.service.id === serviceId
           ? { ...sd, actionStatus: success ? 'success' : 'error', actionMsg: success ? `${action} triggered` : (result.stderr || result.stdout || `${action} failed`) }
           : sd)
       )
-      if (success) setTimeout(() => {
-        setServiceDetails((prev) => prev.map((sd) => sd.service.id === serviceId ? { ...sd, actionStatus: 'idle', actionMsg: '' } : sd))
-        loadDeployments(serviceId)
-      }, 2500)
+      if (success) {
+        // Immediately refresh status to pick up the in-progress deployment
+        setTimeout(() => loadServiceStatuses(), 2_000)
+        setTimeout(() => {
+          setServiceDetails((prev) => prev.map((sd) => sd.service.id === serviceId ? { ...sd, actionStatus: 'idle', actionMsg: '' } : sd))
+          loadDeployments(serviceId)
+        }, 2500)
+      }
     } catch (err: unknown) {
       setServiceDetails((prev) =>
         prev.map((sd) => sd.service.id === serviceId ? { ...sd, actionStatus: 'error', actionMsg: err instanceof Error ? err.message : 'failed' } : sd)

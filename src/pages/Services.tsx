@@ -236,7 +236,8 @@ export default function Services(): React.JSX.Element {
   const handleRedeploy = async (serviceId: string, serviceName: string) => {
     setActionLoading(`redeploy-${serviceId}`)
     try {
-      const result = await window.railway.serviceRedeploy(selectedProject, serviceId, selectedEnv)
+      const projName = projects.find(p => p.id === selectedProject)?.name ?? selectedProject
+      const result = await window.railway.serviceRedeploy(selectedProject, serviceId, selectedEnv, projName, serviceName)
       if (result.code === 0) {
         showToast(`${serviceName} redeploy triggered`)
         await loadServices()
@@ -252,7 +253,8 @@ export default function Services(): React.JSX.Element {
   const handleRestart = async (serviceId: string, serviceName: string) => {
     setActionLoading(`restart-${serviceId}`)
     try {
-      const result = await window.railway.serviceRestart(selectedProject, serviceId, selectedEnv)
+      const projName = projects.find(p => p.id === selectedProject)?.name ?? selectedProject
+      const result = await window.railway.serviceRestart(selectedProject, serviceId, selectedEnv, projName, serviceName)
       if (result.code === 0) {
         showToast(`${serviceName} restarted`)
         await loadServices()

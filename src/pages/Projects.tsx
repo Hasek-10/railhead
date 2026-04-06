@@ -53,11 +53,13 @@ function LinkModal({
   directory,
   onClose,
   onSuccess,
+  onDirectoryChange,
 }: {
   project: Project
   directory: string
   onClose: () => void
-  onSuccess: () => void
+  onSuccess: (dir: string) => void
+  onDirectoryChange: (dir: string) => void
 }): React.JSX.Element {
   const [selectedEnv, setSelectedEnv] = useState(
     project.environments.find((e) => e.name === 'production')?.id ||
@@ -65,6 +67,11 @@ function LinkModal({
   )
   const [linking, setLinking] = useState(false)
   const [error, setError] = useState('')
+
+  const handleBrowse = async () => {
+    const dir = await window.railway.openDirectoryDialog()
+    if (dir) onDirectoryChange(dir)
+  }
 
   const handleLink = async () => {
     setLinking(true)
@@ -74,7 +81,8 @@ function LinkModal({
       if (result.code !== 0) {
         setError(result.stderr || result.stdout || 'Link failed')
       } else {
-        onSuccess()
+        await window.railway.setProjectDir(project.id, directory)
+        onSuccess(directory)
       }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Link failed')
@@ -89,7 +97,6 @@ function LinkModal({
         <div className="flex items-center justify-between mb-4">
           <div>
             <h2 className="text-text-primary font-semibold">Link Project</h2>
-            <p className="text-text-secondary text-xs mt-0.5 font-mono truncate max-w-xs">{directory}</p>
           </div>
           <button onClick={onClose} className="text-text-secondary hover:text-text-primary transition-colors">
             <X size={18} />
@@ -99,6 +106,23 @@ function LinkModal({
         <div className="p-3 bg-accent/5 border border-accent/20 rounded-lg mb-4">
           <p className="text-text-primary text-sm font-medium">{project.name}</p>
           <p className="text-text-secondary text-xs mt-0.5">{project.workspace.name}</p>
+        </div>
+
+        {/* Directory selector */}
+        <div className="mb-4">
+          <label className="block text-text-secondary text-xs mb-1.5">Directory</label>
+          <div className="flex items-center gap-2">
+            <div className="flex-1 flex items-center gap-2 bg-bg border border-border rounded-lg px-3 py-2 min-w-0">
+              <FolderOpen size={13} className="text-text-secondary shrink-0" />
+              <span className="text-sm font-mono text-text-primary truncate">{directory || 'Select a directory...'}</span>
+            </div>
+            <button
+              onClick={handleBrowse}
+              className="px-3 py-2 bg-bg hover:bg-border border border-border rounded-lg text-text-secondary hover:text-text-primary text-xs transition-colors shrink-0"
+            >
+              Browse
+            </button>
+          </div>
         </div>
 
         {project.environments.length > 0 && (
@@ -132,7 +156,7 @@ function LinkModal({
           </button>
           <button
             onClick={handleLink}
-            disabled={linking}
+            disabled={linking || !directory}
             className="flex items-center gap-2 px-4 py-2 bg-accent hover:bg-accent-hover disabled:opacity-60 rounded-lg text-white text-sm font-medium transition-colors"
           >
             {linking ? <><Loader2 size={14} className="animate-spin" />Linking...</> : <><Link2 size={14} />Link Project</>}
@@ -213,8 +237,12 @@ function Projects({ currentDirectory, onDirectoryChange }: ProjectsProps): React
   const [detailProject, setDetailProject] = useState<Project | null>(null)
   const [successMsg, setSuccessMsg] = useState('')
   const [linkDir, setLinkDir] = useState(currentDirectory)
+  const [savedDirs, setSavedDirs] = useState<Record<string, string>>({})
 
-  useEffect(() => { loadProjects() }, [])
+  useEffect(() => {
+    loadProjects()
+    window.railway.getAllProjectDirs().then(setSavedDirs).catch(() => {})
+  }, [])
 
   const loadProjects = async () => {
     if (!getCachedProjects()) setIsLoading(true)
@@ -234,15 +262,23 @@ function Projects({ currentDirectory, onDirectoryChange }: ProjectsProps): React
   }
 
   const handleLinkClick = async (project: Project) => {
-    // Ask for a directory to link into
-    const dir = await window.railway.openDirectoryDialog()
-    if (!dir) return
-    onDirectoryChange(dir)
-    setLinkDir(dir)
-    setLinkTarget(project)
+    // Pre-populate with saved directory if available, otherwise open dialog
+    const saved = savedDirs[project.id]
+    if (saved) {
+      setLinkDir(saved)
+      setLinkTarget(project)
+    } else {
+      const dir = await window.railway.openDirectoryDialog()
+      if (!dir) return
+      onDirectoryChange(dir)
+      setLinkDir(dir)
+      setLinkTarget(project)
+    }
   }
 
-  const handleLinkSuccess = () => {
+  const handleLinkSuccess = (dir: string) => {
+    setSavedDirs(prev => ({ ...prev, [linkTarget!.id]: dir }))
+    onDirectoryChange(dir)
     setLinkTarget(null)
     setSuccessMsg(`Linked ${linkTarget?.name} successfully!`)
     setTimeout(() => setSuccessMsg(''), 4000)
@@ -340,6 +376,13 @@ function Projects({ currentDirectory, onDirectoryChange }: ProjectsProps): React
                 </div>
               )}
 
+              {savedDirs[project.id] && (
+                <div className="flex items-center gap-1.5 mb-3 text-xs text-text-secondary">
+                  <FolderOpen size={11} className="text-success shrink-0" />
+                  <span className="font-mono truncate">{savedDirs[project.id]}</span>
+                </div>
+              )}
+
               <div className="flex items-center justify-between">
                 <span className="text-text-secondary/60 text-xs">Updated {timeAgo(project.updatedAt)}</span>
                 <div className="flex items-center gap-1.5">
@@ -355,7 +398,7 @@ function Projects({ currentDirectory, onDirectoryChange }: ProjectsProps): React
                     className="flex items-center gap-1.5 px-3 py-1.5 bg-accent/10 hover:bg-accent text-accent hover:text-white rounded-lg text-xs font-medium transition-all"
                   >
                     <Link2 size={12} />
-                    Link
+                    {savedDirs[project.id] ? 'Re-link' : 'Link'}
                   </button>
                 </div>
               </div>
@@ -370,6 +413,7 @@ function Projects({ currentDirectory, onDirectoryChange }: ProjectsProps): React
           directory={linkDir}
           onClose={() => setLinkTarget(null)}
           onSuccess={handleLinkSuccess}
+          onDirectoryChange={(dir) => { setLinkDir(dir); onDirectoryChange(dir) }}
         />
       )}
 

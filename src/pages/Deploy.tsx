@@ -149,6 +149,7 @@ function Deploy({ currentDirectory, onDirectoryChange }: DeployProps): React.JSX
   const [selectedProject, setSelectedProject] = useState<string>(_cachedProjs[0]?.id ?? '')
   const [selectedService, setSelectedService] = useState<string>(_cachedProjs[0]?.services?.[0]?.id ?? '')
   const [loadingProjects, setLoadingProjects] = useState(!_cached)
+  const [savedDirs, setSavedDirs] = useState<Record<string, string>>({})
   const terminalRef = useRef<TerminalHandle>(null)
   const cleanupRef = useRef<(() => void) | null>(null)
 
@@ -156,6 +157,10 @@ function Deploy({ currentDirectory, onDirectoryChange }: DeployProps): React.JSX
     loadGitStatus()
     return () => { cleanupRef.current?.() }
   }, [currentDirectory])
+
+  useEffect(() => {
+    window.railway.getAllProjectDirs().then(setSavedDirs).catch(() => {})
+  }, [])
 
   useEffect(() => {
     prefetchProjects().then(result => {
@@ -169,6 +174,13 @@ function Deploy({ currentDirectory, onDirectoryChange }: DeployProps): React.JSX
       }
     }).catch(() => {}).finally(() => setLoadingProjects(false))
   }, [])
+
+  // Auto-fill directory when project selection changes and a saved dir exists
+  useEffect(() => {
+    if (selectedProject && savedDirs[selectedProject]) {
+      onDirectoryChange(savedDirs[selectedProject])
+    }
+  }, [selectedProject, savedDirs])
 
   const loadGitStatus = async () => {
     if (!currentDirectory) return
@@ -194,14 +206,32 @@ function Deploy({ currentDirectory, onDirectoryChange }: DeployProps): React.JSX
     const cmd = serviceId ? `railway up --service ${serviceId}` : 'railway up'
     terminalRef.current?.write(`\x1b[36mRunning: ${cmd}\x1b[0m\r\n\r\n`)
 
+    // Resolve names for tray notification
+    const proj = projects.find(p => p.id === selectedProject)
+    const svc = proj?.services.find(s => s.id === (serviceId || selectedService))
+    const projName = proj?.name ?? 'Unknown'
+    const svcName = svc?.name ?? 'Unknown'
+
+    // Notify tray of deploy start
+    window.railway.trayDeployStarted(projName, svcName).catch(() => {})
+
     const cleanup = window.railway.up(
       (chunk) => terminalRef.current?.write(chunk),
       (code) => {
         cleanupRef.current = null
-        if (code === 0) {
+        const success = code === 0
+        // Notify tray of deploy end
+        window.railway.trayDeployEnded(success, projName, svcName).catch(() => {})
+
+        if (success) {
           setDeployStatus('success')
           terminalRef.current?.write('\r\n\x1b[32m✓ Deployment complete!\x1b[0m\r\n')
           loadGitStatus()
+          // Persist directory mapping for this project
+          if (selectedProject && currentDirectory) {
+            window.railway.setProjectDir(selectedProject, currentDirectory).catch(() => {})
+            setSavedDirs(prev => ({ ...prev, [selectedProject]: currentDirectory }))
+          }
         } else {
           setDeployStatus('error')
           terminalRef.current?.write(`\r\n\x1b[31m✗ Deployment failed (exit ${code})\x1b[0m\r\n`)
@@ -212,7 +242,7 @@ function Deploy({ currentDirectory, onDirectoryChange }: DeployProps): React.JSX
       serviceId
     )
     cleanupRef.current = cleanup
-  }, [currentDirectory])
+  }, [currentDirectory, projects, selectedProject, selectedService])
 
   const handleLocalDeploy = useCallback(() => {
     if (deployStatus === 'deploying') {
@@ -220,10 +250,14 @@ function Deploy({ currentDirectory, onDirectoryChange }: DeployProps): React.JSX
       cleanupRef.current = null
       setDeployStatus('idle')
       terminalRef.current?.write('\r\n\x1b[33m[Cancelled]\x1b[0m\r\n')
+      // Notify tray deploy was cancelled
+      const proj = projects.find(p => p.id === selectedProject)
+      const svc = proj?.services.find(s => s.id === selectedService)
+      window.railway.trayDeployEnded(false, proj?.name ?? 'Unknown', svc?.name ?? 'Unknown').catch(() => {})
       return
     }
     runDeploy(undefined, selectedService || undefined)
-  }, [deployStatus, runDeploy, selectedService])
+  }, [deployStatus, runDeploy, selectedService, projects, selectedProject])
 
   const handleCommitAndDeploy = async () => {
     if (!commitMsg.trim()) { setCommitError('Commit message is required'); return }

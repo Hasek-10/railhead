@@ -28,16 +28,20 @@ const DEFAULT_SETTINGS: NotificationSettings = {
 }
 
 let timer: ReturnType<typeof setInterval> | null = null
+let initialTimeout: ReturnType<typeof setTimeout> | null = null
 const lastSnapshots = new Map<string, ServiceSnapshot>()
 let loadTokenFn: (() => string | null) | null = null
-let updateTrayFn: ((s: 'healthy' | 'warning' | 'error' | 'default') => void) | null = null
+let updateTrayFn: ((s: 'healthy' | 'warning' | 'error' | 'default', detail?: string) => void) | null = null
+let onAllStableFn: (() => void) | null = null
 
 export function initNotifications(
   loadToken: () => string | null,
-  updateTray: (s: 'healthy' | 'warning' | 'error' | 'default') => void
+  updateTray: (s: 'healthy' | 'warning' | 'error' | 'default', detail?: string) => void,
+  onAllStable?: () => void
 ) {
   loadTokenFn = loadToken
   updateTrayFn = updateTray
+  onAllStableFn = onAllStable ?? null
 }
 
 function settingsPath() {
@@ -88,7 +92,7 @@ export function sendNotification(title: string, body: string) {
   }
 }
 
-async function poll() {
+export async function poll() {
   const settings = loadSettings()
   if (!settings.enabled) return
 
@@ -167,21 +171,42 @@ async function poll() {
 
   for (const [k, v] of newSnapshots) lastSnapshots.set(k, v)
 
-  // Update tray icon
+  // Update tray icon with detailed tooltip
   const vals = [...newSnapshots.values()]
-  const hasCrash = vals.some(s => ['CRASHED', 'FAILED'].includes(s.status))
-  const hasDeploying = vals.some(s => ['DEPLOYING', 'BUILDING'].includes(s.status))
-  updateTrayFn?.(hasCrash ? 'error' : hasDeploying ? 'warning' : 'healthy')
+  const crashed = vals.filter(s => ['CRASHED', 'FAILED'].includes(s.status))
+  const deploying = vals.filter(s => ['DEPLOYING', 'BUILDING', 'INITIALIZING'].includes(s.status))
+
+  const lines: string[] = ['Railhead']
+  if (crashed.length > 0) {
+    for (const s of crashed) lines.push(`✗ ${s.serviceName} (${s.projectName}): ${s.status}`)
+  }
+  if (deploying.length > 0) {
+    for (const s of deploying) lines.push(`⟳ ${s.serviceName} (${s.projectName}): ${s.status}`)
+  }
+
+  if (crashed.length > 0) {
+    // Red — sticky until services recover
+    updateTrayFn?.('error', lines.join('\n'))
+  } else if (deploying.length > 0) {
+    // Yellow — in-progress work
+    updateTrayFn?.('warning', lines.join('\n'))
+  } else {
+    // All stable — revert to purple default, stop fast polling
+    lines.push('All services healthy')
+    updateTrayFn?.('default', lines.join('\n'))
+    onAllStableFn?.()
+  }
 }
 
 export function startPolling() {
   const settings = loadSettings()
   stopPolling()
   if (!settings.enabled) return
-  setTimeout(poll, 8_000)
+  initialTimeout = setTimeout(poll, 8_000)
   timer = setInterval(poll, Math.max(settings.pollIntervalSeconds, 30) * 1_000)
 }
 
 export function stopPolling() {
+  if (initialTimeout) { clearTimeout(initialTimeout); initialTimeout = null }
   if (timer) { clearInterval(timer); timer = null }
 }

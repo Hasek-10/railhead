@@ -47,8 +47,8 @@ interface RailwayAPI {
   ) => () => void
 
   serviceStatus: (projectId: string, environmentId: string) => Promise<CommandResult>
-  serviceRedeploy: (projectId: string, serviceId: string, environmentId: string) => Promise<CommandResult>
-  serviceRestart: (projectId: string, serviceId: string, environmentId: string) => Promise<CommandResult>
+  serviceRedeploy: (projectId: string, serviceId: string, environmentId: string, projectName?: string, serviceName?: string) => Promise<CommandResult>
+  serviceRestart: (projectId: string, serviceId: string, environmentId: string, projectName?: string, serviceName?: string) => Promise<CommandResult>
 
   deploymentList: (projectId: string, serviceId: string, environmentId: string) => Promise<CommandResult>
   deploymentListFull: (projectId: string, serviceId: string, environmentId: string, limit?: number) => Promise<CommandResult>
@@ -130,6 +130,16 @@ interface RailwayAPI {
   gitCommit: (cwd: string, message: string) => Promise<{ stdout: string; stderr: string; code: number }>
   gitPush: (cwd: string) => Promise<{ stdout: string; stderr: string; code: number }>
   gitPull: (cwd: string) => Promise<{ stdout: string; stderr: string; code: number }>
+
+  // Tray deploy notifications
+  trayDeployStarted: (projectName: string, serviceName: string) => Promise<void>
+  trayDeployEnded: (success: boolean, projectName: string, serviceName: string) => Promise<void>
+
+  // Project-directory mappings
+  getProjectDir: (projectId: string) => Promise<string | null>
+  getAllProjectDirs: () => Promise<Record<string, string>>
+  setProjectDir: (projectId: string, directory: string) => Promise<void>
+  removeProjectDir: (projectId: string) => Promise<void>
 
   // Notifications
   getNotificationSettings: () => Promise<{

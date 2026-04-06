@@ -290,7 +290,7 @@ export default function Logs() {
 
   const logTypeTab = (type: LogType, Icon: React.FC<{size: number; className?: string}>, label: string) => (
     <button
-      onClick={() => { setLogType(type); setLogLines([]) }}
+      onClick={() => { cleanupRef.current?.(); setStreaming(false); setLogType(type); setLogLines([]) }}
       className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 transition-all ${
         logType === type
           ? 'border-accent text-accent'

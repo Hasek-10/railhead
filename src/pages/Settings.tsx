@@ -19,6 +19,10 @@ interface SettingsProps {
   currentDirectory: string
 }
 
+function stripAnsi(str: string): string {
+  return str.replace(/\x1B\[[0-9;]*[a-zA-Z]/g, '').replace(/\x1B\][^\x07]*\x07/g, '')
+}
+
 interface NotifSettings {
   enabled: boolean
   pollIntervalSeconds: number
@@ -88,9 +92,14 @@ function Settings({ currentDirectory }: SettingsProps): React.JSX.Element {
     setOpenStatus('loading')
     setOpenError('')
     try {
-      await window.railway.open(currentDirectory)
-      setOpenStatus('success')
-      setTimeout(() => setOpenStatus('idle'), 2000)
+      const result = await window.railway.open(currentDirectory)
+      if (result.code !== 0) {
+        setOpenStatus('error')
+        setOpenError(stripAnsi(result.stderr || result.stdout || 'No linked project in this directory'))
+      } else {
+        setOpenStatus('success')
+        setTimeout(() => setOpenStatus('idle'), 2000)
+      }
     } catch (err: unknown) {
       setOpenStatus('error')
       setOpenError(err instanceof Error ? err.message : 'Failed to open')
@@ -111,7 +120,7 @@ function Settings({ currentDirectory }: SettingsProps): React.JSX.Element {
     setRunExitCode(null)
     const cleanup = window.railway.run(
       runCmd.trim(),
-      (chunk) => setRunOutput(p => p + chunk),
+      (chunk) => setRunOutput(p => p + stripAnsi(chunk)),
       (code) => {
         cleanupRef.current = null
         setRunExitCode(code)
@@ -337,7 +346,7 @@ function Settings({ currentDirectory }: SettingsProps): React.JSX.Element {
           </div>
           <div className="flex items-center justify-between">
             <span className="text-text-secondary">Platform</span>
-            <span className="text-text-primary text-xs">Linux (KDE Plasma)</span>
+            <span className="text-text-primary text-xs">{navigator.platform}</span>
           </div>
         </div>
       </div>

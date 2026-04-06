@@ -1,11 +1,11 @@
 import { app, shell, BrowserWindow, ipcMain, Tray, Menu, nativeImage, dialog, Notification } from 'electron'
 import { join } from 'path'
-import { mkdirSync, existsSync, accessSync, constants } from 'fs'
+import { mkdirSync, existsSync, accessSync, constants, readFileSync, writeFileSync } from 'fs'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { runCommand, streamCommand, checkLogin, getEnv } from './railway'
 import { handleLogin, handleLogout, loadToken } from './auth'
 import {
-  initNotifications, startPolling, stopPolling,
+  initNotifications, startPolling, stopPolling, poll,
   loadSettings, saveNotificationSettings, sendNotification,
 } from './notifications'
 import * as os from 'os'
@@ -13,15 +13,17 @@ import { spawn as spawnChild } from 'child_process'
 
 let mainWindow: BrowserWindow | null = null
 let tray: Tray | null = null
+let fastPollTimer: ReturnType<typeof setInterval> | null = null
+let successRevertTimer: ReturnType<typeof setTimeout> | null = null
 const streamCleanups = new Map<string, () => void>()
 const ptyMap = new Map<string, any>()
 
 // Tray icons as pre-rendered 32x32 PNG files (Railhead I-beam logo, color variants)
 const TRAY_ICON_B64 = {
-  default: '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',
-  healthy: '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',
-  warning: 'iVBORw0KGgoAAAANSUhEUgAAACAAAAAgEAYAAAAj6qa3AAAAIGNIUk0AAHomAACAhAAA+gAAAIDoAAB1MAAA6mAAADqYAAAXcJy6UTwAAAAGYktHRAAAAAAAAPlDu38AAAAJcEhZcwAAASAAAAEgAKj/ZiUAAAAHdElNRQfqBAYBFyXkpVG+AAAAJXRFWHRkYXRlOmNyZWF0ZQAyMDI2LTA0LTA2VDAxOjIzOjM3KzAwOjAw4XG6XgAAACV0RVh0ZGF0ZTptb2RpZnkAMjAyNi0wNC0wNlQwMToyMzozNyswMDowMJAsAuIAAAAodEVYdGRhdGU6dGltZXN0YW1wADIwMjYtMDQtMDZUMDE6MjM6MzcrMDA6MDDHOSM9AAAH10lEQVRo3u2ZbXBU1RnHf+fcu7tJYJMQ3swGmzcEiXRNQVqCL7xJbadQQoHRKhYtI45lOljr0EILxKijtnQ6jDQwcSxoJxQHgSidzkgDibQVK0MnBBFiIQlvCQp53WRhs3fv6Ye9d/PCEhIkhA/+82Vz5557nuf/POd5zvkfAbDxDCSfSj5VMAI4whFxT8opcsihaWmSmCQmoS10U089CRk+XLhQrsHo6NxKMDAACBLEEahhJCPxn/RRRRVp7xYhkawsHKIOqUOq4dyvz288v7H1OwiR3JTc5B0GSCQTvzlcjBajqVt/GwDm1I/Q0dHkYABUZDr7lxhov7uhwy7VyVppniSeeFLKThAixITlhipSReKtT2dLTnOax1M+FGPEGC6sjwtHdnoFOjoy4nio20S3muNX2iUQgIFAYMpMWmnl7IyHaKSR7evPcIITypeyQWc4wznydC4KhTG16iqMapEnDjQUqE1qP0NAnWI+XuAYdTgB2c/kmJZNWSTTDiKVHVSAeFo8QCMQJNTJAnuZKutP4MCBa9pM8YR4guyl03WRI3KoXKChoZEkE63X7Yhf6fgS9Ra3gXOZPkN5ICkYdzw0AuRzciVvADXU4+hHAtIZShDMPPMlnoKGgH+Mlg7tzxp/ES4Qb4qfcP4KIuxfBhMaprwDN27EAodOM82MyPiEWGIJRgZo3ee1I247vuyhadsaq2HuA9kFvm+DNkXG0wyUUkdsPxIwgwQuQSjRfJ2hULyoPN9dAgVxZQuHpEP7buOgCIB4UtxL0xWjdSsPYBCD8GXO0nHixHClX2teO9XtiNuOp6UNXRSsBHOPeo89gMY3OpWfG48PMBEgvSKXrZD7h+wC38OwLfaTqvh6qKtpmaa7rZDv7+E7QYK0uwp1tHBqXxNHqcUJ8nW5jgLQn5eZXATzebWLf4H5uNLFzH50vAMSgLfZqfaC/md5J/eBfFtuYBhQwjkehWhZ3O0rEkUfevl4PLSD+Yz5C34GxivhFJTjxBK2AlspVnsBLfzhThMJADWePDJAZam1IqNLSw3DWqXimMhXVSCOsJaqTkXPhmFlwD1iPlvBmGO+zCYw55sr+RIo4F3OATs43xu3ek2AXW3tomOvPTsFtUel4rvAXo4T26kb7OC/DIbBaa51pgPcwRifqQGxaNbWJQwfAXRoOXPpN9o0aN0VeE22A/OZQGsnIr7PnVyC0BZzA2uheHI57hVQf9l/h/Y9EPso5ywAU24sAVabsautXXTstSddMo8EoBonDlB3q3zSwZ0T87HZBC/ePvfuC3Ew6Zm0LZd2glmkssTETonylDiu/gOfL/six/kIrJ783srhGviMy9NkGojDYg3VQBPNOMF81cyjBRra/BnagxB8ydglLoJ4Q9xPY9esuiEE2G3FbjN2tbWLDp9Rx8KOyJt3qX8wE1JGJz5o7AbP6sTfGaXAI/yKesBPq7Waw3iSHOrBszkx32iGlqWXvXIWnHM1rdLngTwiFCVAtZUJf6SMehCpHOQ8iKVR9wE3kIDuRFhtplO1jTqt1ITOB8BcxtMGXKA16qxf4kMD5jABP8j3hUYJyJBQuEG+I6Ck0zzbI2v83o407bM3XWLQP7Ajcol2RA9G2s/t9/oYyetF/xNwi+NrAgbagIHG1wQMtAEDjf4nwDpGE4cTFWULbMN+br/n6OUZ5Svi2vuA6xRAzB8rwUww21QAP/AnKigFFjPb2gL7ugwYiRsD2MQBksBcrr7FdDATwt+5KnV9E0j6QMBXFEDUpyqfw+A+HVNmNkHtY025+ghI2Zx4IDgUmM0EzE4DtvAxSVA7o2mFPhbi/x5jmhUgvIm/NypBmGI1NVHsvD6BJALh8Xg8Xq+6gl31pvo3iZbj6V0EkI98D4M2RTazEiilMqoA0v0w9FPXL00HuO+LUWYt4MYV7TDk++dlKUdB6+bAushhyBflVGhjhnU42mfG8AoULyof7n4HCuLKVkQEkuqrCiRXzwBVzTy8kDRq0MVQEszNy27wjYe0/w19LPg5mHvU+z0KIHZ05zELQI3iBTJAxao1IiNKRGLRCUH87bH5oVJImBe7NlQFGNeoBLZAkiV+yF8htyK7zDcHtmUdbIlvgbqq5h/1JJBcfQkIy7ygFafLBLpEtrewIicOs4YqEIcFqqTHEWsIS7O9K4Edsm3Yri9oxgW0qQA6IJjQ03CdkBWJbsqQSGcnFdBQ2Xa/lg7FKeUN7mrI3Za9Mer5f6DQoQ8UsBaKx5U3u/Og/ph/SI/6gImJBN26SalEQ6PdNTZCQB/P/wOG69UHnDgxA4uFJ8uT5fUeLaORRkTWVAQCFSlPeqQbFFptsMZqg5/dpHuAa8Eujnd1a4PR9YEOv0KEGHQ0IDwOj8M7+YVVDGMYbb9djEAg5BjrxVv1Cqyv6PBDQ8M0dxNHHJkv7pckkURiYYgEEhhRdixS/Lo6blzHpLcCbLvDd4US8OEjVDoTJ04qC1+W6oA6oFLPvYaBwcTl4dRo2/dceJx50FoSehcee1uhbz5Ut//Csn/I3I0fP/69IVWjahj37BJ1SB1ic61LiGbRDIjk1ORUbwJKVapKMlN+IFJFKvrSD4khhsELMnDiJJiZh0DQ4prX6/uEm4WQdZ0nkRBYR5Ago07mkUQSldt/Tjzx6m+FqzjLWXGmNt5f5C8aG0L8HxqJW2QODwkKAAAAAElFTkSuQmCC',
-  error:   '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',
+  default: 'iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAMAAABEpIrGAAAAIGNIUk0AAHomAACAhAAA+gAAAIDoAAB1MAAA6mAAADqYAAAXcJy6UTwAAAAqUExURQAAABoaLhwbMiQdQiUeREwqj2821HE213478H067nY44isfT2UzwRkaKxtK+S8AAAABdFJOUwBA5thmAAAAAWJLR0QAiAUdSAAAAAlwSFlzAAABIAAAASAAqP9mJQAAAAd0SU1FB+oEBg4fM9P0KdoAAAAldEVYdGRhdGU6Y3JlYXRlADIwMjYtMDQtMDZUMDI6MTk6MjUrMDA6MDCJTjHvAAAAJXRFWHRkYXRlOm1vZGlmeQAyMDI2LTA0LTA2VDAyOjE5OjI1KzAwOjAw+BOJUwAAACh0RVh0ZGF0ZTp0aW1lc3RhbXAAMjAyNi0wNC0wNlQxNDozMTo1MSswMDowMCfdQhgAAACQSURBVDjL5ZNJEsMgDAQlBiPw8v/vpqx4E9goPqevdMGghYiIHyGFuW8w9w122IWAaECwQhiSGNIQjICUiyEnGCFKqZD47oYtw7iejXcZ9BeY5lWYJ7S/UBZoEsFyU4dL1D3e3wqdQn3H5Vrqo9hkxuVs1tEuFSC5NGwN/01oJrJ+opnpOmQPX3BXz19eZ/0/X/kMMVb8i/IAAAAASUVORK5CYII=',
+  healthy: 'iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAMAAABEpIrGAAAAIGNIUk0AAHomAACAhAAA+gAAAIDoAAB1MAAA6mAAADqYAAAXcJy6UTwAAAAqUExURQAAABoaLhoeLxssMxsuNB5xRyGvWCGyWSLIXyLGXiK7Wxs3NiCdUxoXLWr5394AAAABdFJOUwBA5thmAAAAAWJLR0QAiAUdSAAAAAlwSFlzAAABIAAAASAAqP9mJQAAAAd0SU1FB+oEBg4fM9P0KdoAAAAldEVYdGRhdGU6Y3JlYXRlADIwMjYtMDQtMDZUMDI6MTk6MjUrMDA6MDCJTjHvAAAAJXRFWHRkYXRlOm1vZGlmeQAyMDI2LTA0LTA2VDAyOjE5OjI1KzAwOjAw+BOJUwAAACh0RVh0ZGF0ZTp0aW1lc3RhbXAAMjAyNi0wNC0wNlQxNDozMTo1MSswMDowMCfdQhgAAACNSURBVDjL5ZNJEoAgDAQTwqbC/79rgaIEkOjZvtIFQxYAAHwEMohzA3FuoEARFGkGKS4oYx3DGsUEsn5heEtM0G5pcPrbDWeGNZ2towz5F7SFJISN+l9kIuUkjuKgDlXUEu+3wqRQx7jUpb6KDWxc7mZd7YJhs6uGvxO6iWyf6Ga6DTlDFsTVk5dXWP8dXdQML3Q4dCoAAAAASUVORK5CYII=',
+  warning: 'iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAMAAABEpIrGAAAAIGNIUk0AAHomAACAhAAA+gAAAIDoAAB1MAAA6mAAADqYAAAXcJy6UTwAAAAqUExURQAAABoaLh8dLTEoKopdHNmNENyPD/mgCvefC9uPD+iWDT8wKMJ/ExcYLxQFaWUAAAABdFJOUwBA5thmAAAAAWJLR0QAiAUdSAAAAAlwSFlzAAABIAAAASAAqP9mJQAAAAd0SU1FB+oEBg4fM9P0KdoAAAAldEVYdGRhdGU6Y3JlYXRlADIwMjYtMDQtMDZUMDI6MTk6MjUrMDA6MDCJTjHvAAAAJXRFWHRkYXRlOm1vZGlmeQAyMDI2LTA0LTA2VDAyOjE5OjI1KzAwOjAw+BOJUwAAACh0RVh0ZGF0ZTp0aW1lc3RhbXAAMjAyNi0wNC0wNlQxNDozMTo1MSswMDowMCfdQhgAAACZSURBVDjL5ZNBDsQgCEVBikpb73/diVongG3NrOetTHwp+AsAAPgINBDfDcR3AxcMIZAjWCFsHA28BSMQp2xITFaI2RHpty/0HmSvd7vUo+uhv+I4q3AeN69oFJJevZQ5B9XqaO9vhSsooTIJ17joqEfYoMdF/azvyDSBJOWJJLQQmKYSBlEl5pl2TTrKUw63rFdvvbyL9f8AUnALQPL7yScAAAAASUVORK5CYII=',
+  error:   'iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAMAAABEpIrGAAAAIGNIUk0AAHomAACAhAAA+gAAAIDoAAB1MAAA6mAAADqYAAAXcJy6UTwAAAAqUExURQAAABoaLh8bLzAeMIcwOdc/QoYvOfFERNM/Qe9EROJBQz4hMr06PxcZLm3Bri8AAAABdFJOUwBA5thmAAAAAWJLR0QAiAUdSAAAAAlwSFlzAAABIAAAASAAqP9mJQAAAAd0SU1FB+oEBg4fM9P0KdoAAAAldEVYdGRhdGU6Y3JlYXRlADIwMjYtMDQtMDZUMDI6MTk6MjUrMDA6MDCJTjHvAAAAJXRFWHRkYXRlOm1vZGlmeQAyMDI2LTA0LTA2VDAyOjE5OjI1KzAwOjAw+BOJUwAAACh0RVh0ZGF0ZTp0aW1lc3RhbXAAMjAyNi0wNC0wNlQxNDozMTo1MSswMDowMCfdQhgAAACYSURBVDjL5ZNZEoQgDAWzDAZc7n9dCwaFRCQHsL+ssgse4QEAgK9AAXFuIM4NdLgEYgNpgX7BsJASOIghshWSQgIPVyj/RivQEvPGaxbW/BVNhv8ptl1Skn0bnKJwlCQS+BjMoUW9431WmAyq1qUf9TVsUHVpl3VXBnRd2nVLzWKEnk6obdDEbotnp03IGb7gPj3/8TrP/wRtyAq3G7pqLQAAAABJRU5ErkJggg==',
 }
 
 // Lazy-initialized after app.whenReady() to avoid crash on Linux before GPU/display is ready
@@ -39,16 +41,34 @@ function getTrayIcons(): Record<keyof typeof TRAY_ICON_B64, Electron.NativeImage
   return trayIcons
 }
 
-function updateTrayIcon(status: 'healthy' | 'warning' | 'error' | 'default') {
+function updateTrayIcon(status: 'healthy' | 'warning' | 'error' | 'default', detail?: string) {
   if (!tray) return
   tray.setImage(getTrayIcons()[status])
-  const tips = {
+  const defaultTips: Record<string, string> = {
     healthy: 'Railhead — All services healthy',
     warning: 'Railhead — Deployment in progress',
     error:   'Railhead — Service failure detected',
     default: 'Railhead',
   }
-  tray.setToolTip(tips[status])
+  tray.setToolTip(detail || defaultTips[status])
+}
+
+// Project-directory mapping persistence
+function projectDirsPath(): string {
+  return join(app.getPath('userData'), 'project-dirs.json')
+}
+
+function loadProjectDirs(): Record<string, string> {
+  try {
+    if (existsSync(projectDirsPath())) {
+      return JSON.parse(readFileSync(projectDirsPath(), 'utf-8'))
+    }
+  } catch { /* ignore corrupt file */ }
+  return {}
+}
+
+function saveProjectDirs(dirs: Record<string, string>): void {
+  writeFileSync(projectDirsPath(), JSON.stringify(dirs, null, 2))
 }
 
 // Helper to run git commands
@@ -274,14 +294,30 @@ function registerIpcHandlers(): void {
     }
   })
 
-  ipcMain.handle('railway:serviceRedeploy', async (_event, projectId: string, serviceId: string, environmentId: string) => {
+  ipcMain.handle('railway:serviceRedeploy', async (_event, projectId: string, serviceId: string, environmentId: string, projectName?: string, serviceName?: string) => {
     const cwd = projectCwd(projectId)
-    return runCommand(['service', 'redeploy', '--service', serviceId, '--environment', environmentId], { cwd })
+    if (successRevertTimer) { clearTimeout(successRevertTimer); successRevertTimer = null }
+    const detail = projectName && serviceName
+      ? `Railhead\n⟳ ${serviceName} (${projectName}): REDEPLOYING`
+      : undefined
+    updateTrayIcon('warning', detail)
+    if (fastPollTimer) clearInterval(fastPollTimer)
+    fastPollTimer = setInterval(poll, 5_000)
+    const result = await runCommand(['service', 'redeploy', '--service', serviceId, '-y'], { cwd, env: { RAILWAY_PROJECT_ID: projectId, RAILWAY_ENVIRONMENT_ID: environmentId } })
+    return result
   })
 
-  ipcMain.handle('railway:serviceRestart', async (_event, projectId: string, serviceId: string, environmentId: string) => {
+  ipcMain.handle('railway:serviceRestart', async (_event, projectId: string, serviceId: string, environmentId: string, projectName?: string, serviceName?: string) => {
     const cwd = projectCwd(projectId)
-    return runCommand(['service', 'restart', '--service', serviceId, '--environment', environmentId], { cwd })
+    if (successRevertTimer) { clearTimeout(successRevertTimer); successRevertTimer = null }
+    const detail = projectName && serviceName
+      ? `Railhead\n⟳ ${serviceName} (${projectName}): RESTARTING`
+      : undefined
+    updateTrayIcon('warning', detail)
+    if (fastPollTimer) clearInterval(fastPollTimer)
+    fastPollTimer = setInterval(poll, 5_000)
+    const result = await runCommand(['service', 'restart', '--service', serviceId, '-y'], { cwd, env: { RAILWAY_PROJECT_ID: projectId, RAILWAY_ENVIRONMENT_ID: environmentId } })
+    return result
   })
 
   ipcMain.on('railway:streamLogs', (event, streamId: string, projectId: string, serviceId: string, environmentId: string) => {
@@ -575,6 +611,58 @@ function registerIpcHandlers(): void {
     return runGit(['pull'], cwd)
   })
 
+  // Tray deploy status (called from Deploy page)
+  ipcMain.handle('tray:deployStarted', async (_event, projectName: string, serviceName: string) => {
+    // Cancel any pending success→default revert
+    if (successRevertTimer) { clearTimeout(successRevertTimer); successRevertTimer = null }
+    const detail = `Railhead\n⟳ ${serviceName} (${projectName}): DEPLOYING`
+    updateTrayIcon('warning', detail)
+    // Start fast polling every 5s
+    if (fastPollTimer) clearInterval(fastPollTimer)
+    fastPollTimer = setInterval(poll, 5_000)
+  })
+
+  ipcMain.handle('tray:deployEnded', async (_event, success: boolean, projectName: string, serviceName: string) => {
+    // Stop fast polling
+    if (fastPollTimer) { clearInterval(fastPollTimer); fastPollTimer = null }
+    if (success) {
+      // Flash green for 30s, then revert to default purple
+      updateTrayIcon('healthy', `Railhead\n✓ ${serviceName} (${projectName}): deployed`)
+      if (successRevertTimer) clearTimeout(successRevertTimer)
+      successRevertTimer = setTimeout(() => {
+        successRevertTimer = null
+        updateTrayIcon('default')
+      }, 30_000)
+    } else {
+      // Stay red — poll() will clear it when the service recovers
+      updateTrayIcon('error', `Railhead\n✗ ${serviceName} (${projectName}): deploy failed`)
+    }
+    // Run one final poll after a short delay to get real status from API
+    setTimeout(poll, 3_000)
+  })
+
+  // Project-directory mappings
+  ipcMain.handle('projectDirs:getAll', async () => {
+    return loadProjectDirs()
+  })
+
+  ipcMain.handle('projectDirs:get', async (_event, projectId: string) => {
+    const dirs = loadProjectDirs()
+    return dirs[projectId] ?? null
+  })
+
+  ipcMain.handle('projectDirs:set', async (_event, projectId: string, directory: string) => {
+    const dirs = loadProjectDirs()
+    dirs[projectId] = directory
+    saveProjectDirs(dirs)
+  })
+
+  ipcMain.handle('projectDirs:remove', async (_event, projectId: string) => {
+    const dirs = loadProjectDirs()
+    delete dirs[projectId]
+    saveProjectDirs(dirs)
+  })
+
   // Notification settings
   ipcMain.handle('notifications:getSettings', async () => {
     return loadSettings()
@@ -621,7 +709,11 @@ app.whenReady().then(() => {
   createTray()
 
   // Init notification polling
-  initNotifications(loadToken, updateTrayIcon)
+  initNotifications(loadToken, updateTrayIcon, () => {
+    // All services stable — stop fast polling and cancel any success flash timer
+    if (fastPollTimer) { clearInterval(fastPollTimer); fastPollTimer = null }
+    if (successRevertTimer) { clearTimeout(successRevertTimer); successRevertTimer = null }
+  })
   startPolling()
 
   app.on('activate', function () {
@@ -637,6 +729,8 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
   stopPolling()
+  if (fastPollTimer) { clearInterval(fastPollTimer); fastPollTimer = null }
+  if (successRevertTimer) { clearTimeout(successRevertTimer); successRevertTimer = null }
   for (const cleanup of streamCleanups.values()) cleanup()
   streamCleanups.clear()
   for (const pty of ptyMap.values()) { try { pty.kill() } catch { /* ignore */ } }

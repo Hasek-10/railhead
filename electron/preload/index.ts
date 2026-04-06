@@ -108,12 +108,12 @@ const railwayAPI = {
   deploymentRemove: (deploymentId: string): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke('railway:deploymentRemove', deploymentId),
 
-  serviceRedeploy: (projectId: string, serviceId: string, environmentId: string): Promise<CommandResult> => {
-    return ipcRenderer.invoke('railway:serviceRedeploy', projectId, serviceId, environmentId)
+  serviceRedeploy: (projectId: string, serviceId: string, environmentId: string, projectName?: string, serviceName?: string): Promise<CommandResult> => {
+    return ipcRenderer.invoke('railway:serviceRedeploy', projectId, serviceId, environmentId, projectName, serviceName)
   },
 
-  serviceRestart: (projectId: string, serviceId: string, environmentId: string): Promise<CommandResult> => {
-    return ipcRenderer.invoke('railway:serviceRestart', projectId, serviceId, environmentId)
+  serviceRestart: (projectId: string, serviceId: string, environmentId: string, projectName?: string, serviceName?: string): Promise<CommandResult> => {
+    return ipcRenderer.invoke('railway:serviceRestart', projectId, serviceId, environmentId, projectName, serviceName)
   },
 
   streamLogsAdvanced: (
@@ -331,6 +331,26 @@ const railwayAPI = {
 
   gitPull: (cwd: string): Promise<{ stdout: string; stderr: string; code: number }> =>
     ipcRenderer.invoke('git:pull', cwd),
+
+  // Tray deploy notifications
+  trayDeployStarted: (projectName: string, serviceName: string): Promise<void> =>
+    ipcRenderer.invoke('tray:deployStarted', projectName, serviceName),
+
+  trayDeployEnded: (success: boolean, projectName: string, serviceName: string): Promise<void> =>
+    ipcRenderer.invoke('tray:deployEnded', success, projectName, serviceName),
+
+  // Project-directory mappings
+  getProjectDir: (projectId: string): Promise<string | null> =>
+    ipcRenderer.invoke('projectDirs:get', projectId),
+
+  getAllProjectDirs: (): Promise<Record<string, string>> =>
+    ipcRenderer.invoke('projectDirs:getAll'),
+
+  setProjectDir: (projectId: string, directory: string): Promise<void> =>
+    ipcRenderer.invoke('projectDirs:set', projectId, directory),
+
+  removeProjectDir: (projectId: string): Promise<void> =>
+    ipcRenderer.invoke('projectDirs:remove', projectId),
 
   // Notifications
   getNotificationSettings: (): Promise<any> =>
