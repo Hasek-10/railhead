@@ -1,35 +1,72 @@
-import { app, shell } from 'electron'
+import { app, shell, safeStorage } from 'electron'
 import { join } from 'path'
 import { readFileSync, writeFileSync, mkdirSync, existsSync, unlinkSync } from 'fs'
 import { spawn } from 'child_process'
 import { getEnv } from './railway'
 
 const CONFIG_DIR = join(app.getPath('userData'), 'config')
-const TOKEN_FILE = join(CONFIG_DIR, 'token.json')
+const TOKEN_FILE = join(CONFIG_DIR, 'token.enc')
+const LEGACY_TOKEN_FILE = join(CONFIG_DIR, 'token.json')
 
 // Strip ANSI escape codes from terminal output
 function stripAnsi(str: string): string {
   return str.replace(/\x1B\[[0-9;]*[mGKHF]/g, '').replace(/\x1B\][^\x07]*\x07/g, '')
 }
 
-export function loadToken(): string | null {
+/**
+ * Migrate plain-text token.json → encrypted token.enc.
+ * Called once on load; removes the legacy file after successful migration.
+ */
+function migrateLegacyToken(): string | null {
   try {
-    if (!existsSync(TOKEN_FILE)) return null
-    const data = JSON.parse(readFileSync(TOKEN_FILE, 'utf-8'))
-    return data.token || null
-  } catch {
-    return null
-  }
+    if (!existsSync(LEGACY_TOKEN_FILE)) return null
+    const data = JSON.parse(readFileSync(LEGACY_TOKEN_FILE, 'utf-8'))
+    const token = data.token
+    if (token) {
+      saveToken(token)
+      unlinkSync(LEGACY_TOKEN_FILE)
+      return token
+    }
+  } catch { /* ignore corrupt legacy file */ }
+  return null
+}
+
+export function loadToken(): string | null {
+  // Try encrypted store first
+  try {
+    if (existsSync(TOKEN_FILE)) {
+      const encrypted = readFileSync(TOKEN_FILE)
+      if (safeStorage.isEncryptionAvailable()) {
+        return safeStorage.decryptString(encrypted)
+      }
+      // safeStorage unavailable — fall through to legacy check
+    }
+  } catch { /* corrupt or wrong-key file — fall through */ }
+
+  // Migrate legacy plain-text token if present
+  const migrated = migrateLegacyToken()
+  if (migrated) return migrated
+
+  return null
 }
 
 export function saveToken(token: string): void {
   if (!existsSync(CONFIG_DIR)) mkdirSync(CONFIG_DIR, { recursive: true })
-  writeFileSync(TOKEN_FILE, JSON.stringify({ token }), { mode: 0o600 })
+  if (safeStorage.isEncryptionAvailable()) {
+    const encrypted = safeStorage.encryptString(token)
+    writeFileSync(TOKEN_FILE, encrypted, { mode: 0o600 })
+  } else {
+    // Fallback: store plain-text if OS keychain is unavailable (rare)
+    writeFileSync(TOKEN_FILE, token, { mode: 0o600 })
+  }
 }
 
 export function clearToken(): void {
   try {
     if (existsSync(TOKEN_FILE)) unlinkSync(TOKEN_FILE)
+  } catch { /* ignore */ }
+  try {
+    if (existsSync(LEGACY_TOKEN_FILE)) unlinkSync(LEGACY_TOKEN_FILE)
   } catch { /* ignore */ }
 }
 
